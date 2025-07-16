@@ -214,18 +214,44 @@ function createSymlink() # args: sourcePath, linkPath
 		panic $? "Failed to create symbolic link $linkPath -> $sourcePath"
 }
  
-function runCmdOnDevice() # args: command message
+function runCmdOnDevice() # args: connection_command remote_command
 {
-	local command="$1"
-	local message="$1"
-	local final="$1"
+    local -a ssh_opts=(-o "StrictHostKeyChecking=no")
+    local connect_cmd="$1"
+    local remote_cmd="$2"
+    local message="$3"
+    
+    # 如果远程命令是 #ignore，则清空 ssh_opts
+    # 这是必须使用 #ignore 来判断忽略的情况，因为只连接ssh时，也需要忽略指纹确认yes/no会话
+    if [[ "$remote_cmd" == "#ignore" ]]; then
+        ssh_opts=()
+    fi
+    
+    # 构建完整命令
+    local final_cmd
+    if [[ "$MonkeyDevDevicePassword" != "" ]]; then
+        final_cmd="sshpass -p $MonkeyDevDevicePassword $connect_cmd"
+    else
+        final_cmd="$connect_cmd"
+    fi
+    
+    # 添加 SSH 选项（如果有的话）
+    if [[ ${#ssh_opts[@]} -gt 0 ]]; then
+        final_cmd="$final_cmd ${ssh_opts[*]}"
+    fi
+    
+    # 添加远程命令
+    final_cmd="$final_cmd $remote_cmd"
 
-	if [[ "$MonkeyDevDevicePassword" != "" ]]; then
-		final="sshpass -p $MonkeyDevDevicePassword $command"
-	fi
-
-	eval "$final" || \
-		panic $? "$message"
+    echo "完整命令: $final_cmd"
+    
+    # 执行命令
+    if ! eval "$final_cmd"; then
+        echo "命令执行失败，退出码: $?"
+        panic $? "执行失败: $final_cmd, 错误消息: $message"
+    else
+        echo "执行成功: $final_cmd"
+    fi
 }
 
 #拷贝文件到设备
@@ -237,14 +263,14 @@ function copyFileToDevice() # args: sourceFile, targetDir, hostAddress, hostPort
 	local hostPort="$4"
 	local targetFilePath
 
-	runCmdOnDevice "ssh -p$hostPort root@$hostAddress mkdir -p \"$targetDir\"" "Failed to create directory $targetDir on device $hostAddress"
+	runCmdOnDevice "ssh -p$hostPort root@$hostAddress" "mkdir -p \"$targetDir\"" "Failed to create directory $targetDir on device $hostAddress"
 	
 	targetFilePath="$targetDir/`basename \"$sourceFile\"`" || \
 		panic $? "Failed to build target file path"
 		
-	runCmdOnDevice "ssh -p$hostPort root@$hostAddress rm -f \"$targetFilePath\"" "Failed to remove existing file $targetFilePath on device $hostAddress"
+	runCmdOnDevice "ssh -p$hostPort root@$hostAddress" "rm -f \"$targetFilePath\"" "Failed to remove existing file $targetFilePath on device $hostAddress"
 	
-	runCmdOnDevice "scp -P$hostPort \"$sourceFile\" root@$hostAddress:\"$targetFilePath\"" "Failed to copy file $sourceFile to device $hostAddress at directory $targetDir"
+	runCmdOnDevice "scp -P$hostPort \"$sourceFile\" root@$hostAddress:\"$targetFilePath\"" "#ignore" "Failed to copy file $sourceFile to device $hostAddress at directory $targetDir"
 }
 
 function getBashProfileEnvVarValue() # args: envVarName
@@ -590,7 +616,7 @@ function managePackageOnDevice() # args: manageAction, packageFileOrName, hostAd
 	# install, remove or purge package #
 	echo "$doingWhat package `basename \"$packageFileOrName\"` $direction device $hostAddress... "
 
-	runCmdOnDevice "ssh -p$hostPort root@$hostAddress $cmdBin $cmdArg $packageFileOrName" "Failed."
+	runCmdOnDevice "ssh -p$hostPort root@$hostAddress" "$cmdBin $cmdArg $packageFileOrName" "Failed."
 	
 	# success #
 	echo "Done."
@@ -639,7 +665,7 @@ function runFuncOnDevice() # args: function, hostAddress, hostPort
 	;;
 	esac
 
-	runCmdOnDevice "ssh -p$hostPort root@$hostAddress $cmd" "Failed to perform function $func on device $hostAddress"
+	runCmdOnDevice "ssh -p$hostPort root@$hostAddress" "$cmd" "Failed to perform function $func on device $hostAddress"
 }
 
 #sudo
